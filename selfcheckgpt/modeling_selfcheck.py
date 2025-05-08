@@ -5,14 +5,26 @@ import torch
 from tqdm import tqdm
 from typing import Dict, List, Set, Tuple, Union
 from transformers import logging
+
 logging.set_verbosity_error()
 
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
-from transformers import LongformerTokenizer, LongformerForMultipleChoice, LongformerForSequenceClassification
+from transformers import (
+    LongformerTokenizer,
+    LongformerForMultipleChoice,
+    LongformerForSequenceClassification,
+)
 from transformers import DebertaV2ForSequenceClassification, DebertaV2Tokenizer
-from selfcheckgpt.utils import MQAGConfig, expand_list1, expand_list2, NLIConfig, LLMPromptConfig
+from selfcheckgpt.utils import (
+    MQAGConfig,
+    expand_list1,
+    expand_list2,
+    NLIConfig,
+    LLMPromptConfig,
+)
 from selfcheckgpt.modeling_mqag import question_generation_sentence_level, answering
 from selfcheckgpt.modeling_ngram import UnigramModel, NgramModel
+
 
 # ---------------------------------------------------------------------------------------- #
 # Functions for counting
@@ -42,8 +54,9 @@ def method_simple_counting(
     if count_good_sample == 0:
         score = 0.5
     else:
-        score = (count_good_sample-count_match) / count_good_sample
+        score = (count_good_sample - count_match) / count_good_sample
     return score
+
 
 def method_vanilla_bayes(
     prob,
@@ -51,7 +64,9 @@ def method_vanilla_bayes(
     prob_s,
     u_score_s,
     num_samples,
-    beta1, beta2, AT,
+    beta1,
+    beta2,
+    AT,
 ):
     """
     (vanilla) bayes method score: compute P(sentence is non-factual | count_match, count_mismatch)
@@ -68,10 +83,13 @@ def method_vanilla_bayes(
                 count_match += 1
             else:
                 count_mismatch += 1
-    gamma1 = beta2 / (1.0-beta1)
-    gamma2 = beta1 / (1.0-beta2)
-    score = (gamma2**count_mismatch) / ((gamma1**count_match) + (gamma2**count_mismatch))
+    gamma1 = beta2 / (1.0 - beta1)
+    gamma2 = beta1 / (1.0 - beta2)
+    score = (gamma2**count_mismatch) / (
+        (gamma1**count_match) + (gamma2**count_mismatch)
+    )
     return score
+
 
 def method_bayes_with_alpha(
     prob,
@@ -79,7 +97,8 @@ def method_bayes_with_alpha(
     prob_s,
     u_score_s,
     num_samples,
-    beta1, beta2,
+    beta1,
+    beta2,
 ):
     """
     bayes method (with answerability score, i.e. soft-counting) score
@@ -94,10 +113,13 @@ def method_bayes_with_alpha(
             count_match += ans_score
         else:
             count_mismatch += ans_score
-    gamma1 = beta2 / (1.0-beta1)
-    gamma2 = beta1 / (1.0-beta2)
-    score = (gamma2**count_mismatch) / ((gamma1**count_match) + (gamma2**count_mismatch))
+    gamma1 = beta2 / (1.0 - beta1)
+    gamma2 = beta1 / (1.0 - beta2)
+    score = (gamma2**count_mismatch) / (
+        (gamma1**count_match) + (gamma2**count_mismatch)
+    )
     return score
+
 
 def answerability_scoring(
     u_model,
@@ -110,31 +132,41 @@ def answerability_scoring(
     """
     :return prob: prob -> 0.0 means unanswerable, prob -> 1.0 means answerable
     """
-    input_text = question + ' ' + u_tokenizer.sep_token + ' ' + context
-    inputs = u_tokenizer(input_text, max_length=max_length, truncation=True, return_tensors="pt")
+    input_text = question + " " + u_tokenizer.sep_token + " " + context
+    inputs = u_tokenizer(
+        input_text, max_length=max_length, truncation=True, return_tensors="pt"
+    )
     inputs = inputs.to(device)
     logits = u_model(**inputs).logits
     logits = logits.squeeze(-1)
     prob = torch.sigmoid(logits).item()
     return prob
 
+
 class SelfCheckMQAG:
     """
     SelfCheckGPT (MQAG varaint): Checking LLM's text against its own sampled texts via MultipleChoice Question Answering
     """
+
     def __init__(
         self,
         g1_model: str = None,
         g2_model: str = None,
         answering_model: str = None,
         answerability_model: str = None,
-        device = None
+        device=None,
     ):
 
         g1_model = g1_model if g1_model is not None else MQAGConfig.generation1_squad
         g2_model = g2_model if g2_model is not None else MQAGConfig.generation2
-        answering_model = answering_model if answering_model is not None else MQAGConfig.answering
-        answerability_model = answerability_model if answerability_model is not None else MQAGConfig.answerability
+        answering_model = (
+            answering_model if answering_model is not None else MQAGConfig.answering
+        )
+        answerability_model = (
+            answerability_model
+            if answerability_model is not None
+            else MQAGConfig.answerability
+        )
 
         # Question Generation Systems (G1 & G2)
         self.g1_tokenizer = AutoTokenizer.from_pretrained(g1_model)
@@ -148,7 +180,9 @@ class SelfCheckMQAG:
 
         # (Un)Answerability System (U)
         self.u_tokenizer = LongformerTokenizer.from_pretrained(answerability_model)
-        self.u_model = LongformerForSequenceClassification.from_pretrained(answerability_model)
+        self.u_model = LongformerForSequenceClassification.from_pretrained(
+            answerability_model
+        )
 
         self.g1_model.eval()
         self.g2_model.eval()
@@ -182,32 +216,47 @@ class SelfCheckMQAG:
         :param num_questions_per_sent: int -- number of quetions to be generated per sentence
         :return sent_scores: sentence-level score of the same length as len(sentences) # inconsistency_score, i.e. higher means likely hallucination
         """
-        assert scoring_method in ['counting', 'bayes', 'bayes_with_alpha']
+        assert scoring_method in ["counting", "bayes", "bayes_with_alpha"]
         num_samples = len(sampled_passages)
         sent_scores = []
         for sentence in sentences:
 
             # Question + Choices Generation
             questions = question_generation_sentence_level(
-                self.g1_model, self.g1_tokenizer,
-                self.g2_model, self.g2_tokenizer,
-                sentence, passage, num_questions_per_sent, self.device)
+                self.g1_model,
+                self.g1_tokenizer,
+                self.g2_model,
+                self.g2_tokenizer,
+                sentence,
+                passage,
+                num_questions_per_sent,
+                self.device,
+            )
 
             # Answering
             scores = []
-            max_seq_length = 4096 # answering & answerability max length
+            max_seq_length = 4096  # answering & answerability max length
             for question_item in questions:
-                question, options = question_item['question'], question_item['options']
+                question, options = question_item["question"], question_item["options"]
                 # response
                 prob = answering(
-                    self.a_model, self.a_tokenizer,
-                    question, options, passage,
-                    max_seq_length, self.device)
+                    self.a_model,
+                    self.a_tokenizer,
+                    question,
+                    options,
+                    passage,
+                    max_seq_length,
+                    self.device,
+                )
 
                 u_score = answerability_scoring(
-                    self.u_model, self.u_tokenizer,
-                    question, passage,
-                    max_seq_length, self.device)
+                    self.u_model,
+                    self.u_tokenizer,
+                    question,
+                    passage,
+                    max_seq_length,
+                    self.device,
+                )
 
                 prob_s = np.zeros((num_samples, 4))
                 u_score_s = np.zeros((num_samples,))
@@ -215,31 +264,61 @@ class SelfCheckMQAG:
 
                     # sample
                     prob_s[si] = answering(
-                        self.a_model, self.a_tokenizer,
-                        question, options, sampled_passage,
-                        max_seq_length, self.device)
+                        self.a_model,
+                        self.a_tokenizer,
+                        question,
+                        options,
+                        sampled_passage,
+                        max_seq_length,
+                        self.device,
+                    )
                     u_score_s[si] = answerability_scoring(
-                        self.u_model, self.u_tokenizer,
-                        question, sampled_passage,
-                        max_seq_length, self.device)
+                        self.u_model,
+                        self.u_tokenizer,
+                        question,
+                        sampled_passage,
+                        max_seq_length,
+                        self.device,
+                    )
 
                 # doing comparision
-                if scoring_method == 'counting':
-                    score = method_simple_counting(prob, u_score, prob_s, u_score_s, num_samples, AT=kwargs['AT'])
-                elif scoring_method == 'bayes':
-                    score = method_vanilla_bayes(prob, u_score, prob_s, u_score_s, num_samples, beta1=kwargs['beta1'], beta2=kwargs['beta2'], AT=kwargs['AT'])
-                elif scoring_method == 'bayes_with_alpha':
-                    score = method_bayes_with_alpha(prob, u_score, prob_s, u_score_s, num_samples, beta1=kwargs['beta1'], beta2=kwargs['beta2'])
+                if scoring_method == "counting":
+                    score = method_simple_counting(
+                        prob, u_score, prob_s, u_score_s, num_samples, AT=kwargs["AT"]
+                    )
+                elif scoring_method == "bayes":
+                    score = method_vanilla_bayes(
+                        prob,
+                        u_score,
+                        prob_s,
+                        u_score_s,
+                        num_samples,
+                        beta1=kwargs["beta1"],
+                        beta2=kwargs["beta2"],
+                        AT=kwargs["AT"],
+                    )
+                elif scoring_method == "bayes_with_alpha":
+                    score = method_bayes_with_alpha(
+                        prob,
+                        u_score,
+                        prob_s,
+                        u_score_s,
+                        num_samples,
+                        beta1=kwargs["beta1"],
+                        beta2=kwargs["beta2"],
+                    )
                 scores.append(score)
             sent_score = np.mean(scores)
             sent_scores.append(sent_score)
 
         return np.array(sent_scores)
 
+
 class SelfCheckBERTScore:
     """
     SelfCheckGPT (BERTScore variant): Checking LLM's text against its own sampled texts via BERTScore (against best-matched sampled sentence)
     """
+
     def __init__(self, default_model="en", rescale_with_baseline=True):
         """
         :default_model: model for BERTScore
@@ -249,7 +328,7 @@ class SelfCheckBERTScore:
             - see https://github.com/Tiiiger/bert_score/blob/master/journal/rescale_baseline.md
         """
         self.nlp = spacy.load("en_core_web_sm")
-        self.default_model = default_model # en => roberta-large
+        self.default_model = default_model  # en => roberta-large
         self.rescale_with_baseline = rescale_with_baseline
         print("SelfCheck-BERTScore initialized")
 
@@ -270,33 +349,41 @@ class SelfCheckBERTScore:
         bertscore_array = np.zeros((num_sentences, num_samples))
         for s in range(num_samples):
             sample_passage = sampled_passages[s]
-            sentences_sample = [sent for sent in self.nlp(sample_passage).sents] # List[spacy.tokens.span.Span]
-            sentences_sample = [sent.text.strip() for sent in sentences_sample if len(sent) > 3]
-            num_sentences_sample  = len(sentences_sample)
+            sentences_sample = [
+                sent for sent in self.nlp(sample_passage).sents
+            ]  # List[spacy.tokens.span.Span]
+            sentences_sample = [
+                sent.text.strip() for sent in sentences_sample if len(sent) > 3
+            ]
+            num_sentences_sample = len(sentences_sample)
 
-            refs  = expand_list1(sentences, num_sentences_sample) # r1,r1,r1,....
-            cands = expand_list2(sentences_sample, num_sentences) # s1,s2,s3,...
+            refs = expand_list1(sentences, num_sentences_sample)  # r1,r1,r1,....
+            cands = expand_list2(sentences_sample, num_sentences)  # s1,s2,s3,...
 
             P, R, F1 = bert_score.score(
-                    cands, refs,
-                    lang=self.default_model, verbose=False,
-                    rescale_with_baseline=self.rescale_with_baseline,
+                cands,
+                refs,
+                lang=self.default_model,
+                verbose=False,
+                rescale_with_baseline=self.rescale_with_baseline,
             )
             F1_arr = F1.reshape(num_sentences, num_sentences_sample)
             F1_arr_max_axis1 = F1_arr.max(axis=1).values
             F1_arr_max_axis1 = F1_arr_max_axis1.numpy()
 
-            bertscore_array[:,s] = F1_arr_max_axis1
+            bertscore_array[:, s] = F1_arr_max_axis1
 
         bertscore_mean_per_sent = bertscore_array.mean(axis=-1)
         one_minus_bertscore_mean_per_sent = 1.0 - bertscore_mean_per_sent
         return one_minus_bertscore_mean_per_sent
+
 
 class SelfCheckNgram:
     """
     SelfCheckGPT (Ngram variant): Checking LLM's text against its own sampled texts via ngram model
     Note that this variant of SelfCheck score is not bounded in [0.0, 1.0]
     """
+
     def __init__(self, n: int, lowercase: bool = True):
         """
         :param n: n-gram model, n=1 is Unigram, n=2 is Bigram, etc.
@@ -325,15 +412,13 @@ class SelfCheckNgram:
         ngram_pred = ngram_model.evaluate(sentences)
         return ngram_pred
 
+
 class SelfCheckNLI:
     """
     SelfCheckGPT (NLI variant): Checking LLM's text against its own sampled texts via DeBERTa-v3 finetuned to Multi-NLI
     """
-    def __init__(
-        self,
-        nli_model: str = None,
-        device = None
-    ):
+
+    def __init__(self, nli_model: str = None, device=None):
         nli_model = nli_model if nli_model is not None else NLIConfig.nli_model
         self.tokenizer = DebertaV2Tokenizer.from_pretrained(nli_model)
         self.model = DebertaV2ForSequenceClassification.from_pretrained(nli_model)
@@ -365,14 +450,17 @@ class SelfCheckNLI:
             for sample_i, sample in enumerate(sampled_passages):
                 inputs = self.tokenizer.batch_encode_plus(
                     batch_text_or_text_pairs=[(sentence, sample)],
-                    add_special_tokens=True, padding="longest",
-                    truncation=True, return_tensors="pt",
-                    return_token_type_ids=True, return_attention_mask=True,
+                    add_special_tokens=True,
+                    padding="longest",
+                    truncation=True,
+                    return_tensors="pt",
+                    return_token_type_ids=True,
+                    return_attention_mask=True,
                 )
                 inputs = inputs.to(self.device)
-                logits = self.model(**inputs).logits # neutral is already removed
+                logits = self.model(**inputs).logits  # neutral is already removed
                 probs = torch.softmax(logits, dim=-1)
-                prob_ = probs[0][1].item() # prob(contradiction)
+                prob_ = probs[0][1].item()  # prob(contradiction)
                 scores[sent_i, sample_i] = prob_
         scores_per_sentence = scores.mean(axis=-1)
         return scores_per_sentence
@@ -382,11 +470,8 @@ class SelfCheckLLMPrompt:
     """
     SelfCheckGPT (LLM Prompt): Checking LLM's text against its own sampled texts via open-source LLM prompting
     """
-    def __init__(
-        self,
-        model: str = None,
-        device = None
-    ):
+
+    def __init__(self, model: str = None, device=None):
         model = model if model is not None else LLMPromptConfig.model
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.model = AutoModelForCausalLM.from_pretrained(model, torch_dtype="auto")
@@ -396,7 +481,7 @@ class SelfCheckLLMPrompt:
         self.model.to(device)
         self.device = device
         self.prompt_template = "Context: {context}\n\nSentence: {sentence}\n\nIs the sentence supported by the context above? Answer Yes or No.\n\nAnswer: "
-        self.text_mapping = {'yes': 0.0, 'no': 1.0, 'n/a': 0.5}
+        self.text_mapping = {"yes": 0.0, "no": 1.0, "n/a": 0.5}
         self.not_defined_text = set()
         print(f"SelfCheck-LLMPrompt ({model}) initialized to device {device}")
 
@@ -424,20 +509,21 @@ class SelfCheckLLMPrompt:
         for sent_i in tqdm(range(num_sentences), disable=disable):
             sentence = sentences[sent_i]
             for sample_i, sample in enumerate(sampled_passages):
-                
+
                 # this seems to improve performance when using the simple prompt template
-                sample = sample.replace("\n", " ") 
+                sample = sample.replace("\n", " ")
 
                 prompt = self.prompt_template.format(context=sample, sentence=sentence)
                 inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
                 generate_ids = self.model.generate(
                     inputs.input_ids,
                     max_new_tokens=5,
-                    do_sample=False, # hf's default for Llama2 is True
+                    do_sample=False,  # hf's default for Llama2 is True
                 )
                 output_text = self.tokenizer.batch_decode(
-                    generate_ids, skip_special_tokens=True, 
-                    clean_up_tokenization_spaces=False
+                    generate_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
                 )[0]
                 generate_text = output_text.replace(prompt, "")
                 score_ = self.text_postprocessing(generate_text)
@@ -458,13 +544,13 @@ class SelfCheckLLMPrompt:
         # tested on Llama-2-chat (7B, 13B) --- this code has 100% coverage on wikibio gpt3 generated data
         # however it may not work with other datasets, or LLMs
         text = text.lower().strip()
-        if text[:3] == 'yes':
-            text = 'yes'
-        elif text[:2] == 'no':
-            text = 'no'
+        if text[:3] == "yes":
+            text = "yes"
+        elif text[:2] == "no":
+            text = "no"
         else:
             if text not in self.not_defined_text:
                 print(f"warning: {text} not defined")
                 self.not_defined_text.add(text)
-            text = 'n/a'
+            text = "n/a"
         return self.text_mapping[text]

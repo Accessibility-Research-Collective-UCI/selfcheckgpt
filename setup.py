@@ -1,14 +1,14 @@
 from setuptools import setup
 
 # reading long description from file
-with open('DESCRIPTION.txt') as file:
+with open("DESCRIPTION.txt") as file:
     long_description = file.read()
 
 REQUIREMENTS = [
     "transformers>=4.35",
     "torch>=1.12",
     "numpy",
-    "bert_score",
+    "bert-score",
     "spacy",
     "nltk",
     "openai",
@@ -30,17 +30,17 @@ with open("selfcheckgpt/version.py", "r") as version_file:
 
 # calling the setup function
 setup(
-    name='selfcheckgpt',
+    name="selfcheckgpt",
     version=VERSION["__version__"],
-    description='SelfCheckGPT: Assessing text-based responses from LLMs',
+    description="SelfCheckGPT: Assessing text-based responses from LLMs",
     long_description=long_description,
-    url='https://github.com/potsawee/selfcheckgpt',
-    author='Potsawee Manakul',
-    author_email='m.potsawee@gmail.com',
-    license='MIT',
-    packages=['selfcheckgpt'],
+    url="https://github.com/potsawee/selfcheckgpt",
+    author="Potsawee Manakul",
+    author_email="m.potsawee@gmail.com",
+    license="MIT",
+    packages=["selfcheckgpt"],
     classifiers=CLASSIFIERS,
     install_requires=REQUIREMENTS,
-    keywords='selfcheckgpt',
+    keywords="selfcheckgpt",
     include_package_data=True,
 )
